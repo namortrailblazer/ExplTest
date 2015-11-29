@@ -1,5 +1,4 @@
-Explosion shader effect
-for integration into Unreal Engine 4 projects
+Explosion effect shader as Unreal Engine 4 custom nodes.
 
 Created by Roman Komary 2014-2015
 
