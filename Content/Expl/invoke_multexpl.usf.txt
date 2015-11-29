@@ -1,0 +1,20 @@
+/* Explosion invokation shader
+
+Created by Roman Komary 2015
+License Creative Commons Attribution-NonCommercial-ShareAlike 3.0 Unported License http://creativecommons.org/licenses/by-nc-sa/3.0/deed.en_US
+*/
+
+float depthOnCameraDirVector = -scenedepth / cameraToPixelDir_CamSpace.z;
+
+float4 fcolor = col_done_explshader;
+
+// Following switch ensures that the first call (GetMaterialOpacity) executes the shader function, but the
+// second call (GetMaterialEmissive) for the same pixel does not need to calculate again but gets the cached color.
+if ( done_explshader == 0 )
+	mainImage( fcolor, time, cameraPos.xzy, pos.xzy, centerpos.xzy, depthOnCameraDirVector, noisetex, noisetexSampler, colBottom, colTop, color_low, brightness, brightrad, contrast, grain, ballness, growth, fade, densitystrength, thinout_smooth, downscale, rolling_init_damp, rolling_speed, steps, mult_explosions, explosion_seed, variation_seed, delay_seed, delay_range, ball_spread );
+
+done_explshader = 1;
+// if you want to test if the done flag works, comment out the following line and if the explosion works but is just pure black, it is working.
+col_done_explshader = fcolor;
+
+return fcolor;

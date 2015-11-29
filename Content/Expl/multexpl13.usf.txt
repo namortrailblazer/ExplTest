@@ -1,0 +1,429 @@
+	return 0.;
+}
+
+/* Explosion
+
+Created by Roman Komary 2014-2015
+License Creative Commons Attribution-NonCommercial-ShareAlike 3.0 Unported License http://creativecommons.org/licenses/by-nc-sa/3.0/deed.en_US
+
+This is "Explosion effect" https://www.shadertoy.com/view/Xd3GWn
+
+Based on huwb's Anatomy of an explosion https://www.shadertoy.com/view/Xss3DS
+and on iq's Hell https://www.shadertoy.com/view/MdfGRX
+*/
+
+#ifndef EXPLSHADER
+#define EXPLSHADER
+
+static int done_explshader = 0;
+static float4 col_done_explshader = float4(0,0,0,0);
+
+
+// Putting LOW_Q to 1 or 2, you should also increase grain and decrease ballness and growth to compensate somehow.
+//#define LOW_Q 1
+
+// Disable this if you want purely procedural noise instead of using a lookup texture.
+// The procedural is a bit slower but useful if you do not have easy access to textures.
+#define NOISE_LUT
+
+// Interestingly, increasing this but not mult_explosions causes the shader in Unreal Engine 4 (4.9 tested) to increase in GPU usage. Why? These should be just unused items of the balls array.
+#define MAX_MULT_EXPLOSIONS 5
+
+/* for up-moving explosion similar to explosion mushroom, put
+	downscale = 1.75;
+	grain = 2.7;
+	rolling_init_damp = 0.2;
+	ball_spread = 0.4;
+*/
+
+/* for mobile device, for faster rendering but with less quality, put
+	LOW_Q 1
+	mult_explosions = 3;
+	steps = 25;
+*/
+
+struct Ball
+{
+	float3 offset;
+    float3 dir;
+    float delay;
+};
+
+Ball balls[MAX_MULT_EXPLOSIONS];
+
+float hash( float n )
+{
+	return frac(cos(n)*41415.92653);	//https://www.shadertoy.com/view/4sXGRM
+    //return frac(sin(n)*753.5453123);	//https://www.shadertoy.com/view/4sfGzS
+}
+
+float2 hash2( float n )
+{
+    //return frac(cos(n)*float2(10003.579, 37049.7));	//https://www.shadertoy.com/view/XtsSWs
+    return frac(sin(float2(n,n+1.0))*float2(13.5453123,31.1459123));
+}
+
+float3 hash3( float n )
+{
+    return frac(sin(float3(n,n+1.0,n+2.0))*float3(13.5453123,31.1459123,37.3490423));
+}
+
+#ifdef NOISE_LUT
+//iq's LUT 3D noise
+float noise( in float3 x, Texture2D noisetex, SamplerState noisetexSampler )
+{
+    float3 f = frac(x);
+    float3 p = x - f; // this avoids the floor() but doesnt affect performance for me.
+#ifndef LOW_Q		// in low quality setting, for speed, we try to live without that. we compensate with growth and fade.
+    f = f*f*(3.0-2.0*f);
+#endif
+     
+    float2 uv = (p.xy+float2(37.0,17.0)*p.z) + f.xy;
+    float2 rg = Texture2DSampleLevel( noisetex, noisetexSampler, (uv+ 0.5)/256.0, 0 ).yx;
+    return lerp( rg.x, rg.y, f.z );
+}
+#else
+
+float noise( in float3 x, Texture2D dummy, SamplerState dummySampler )
+{
+    float3 f = frac(x);
+    float3 p = x - f; // this avoids the floor() but doesnt affect performance for me.
+#ifndef LOW_Q		// in low quality setting, for speed, we try to live without that. we compensate with growth and fade.
+    f = f*f*(3.0-2.0*f);
+#endif
+	
+    float n = p.x + p.y*157.0 + 113.0*p.z;
+    return lerp(lerp(lerp( hash(n+  0.0), hash(n+  1.0),f.x),
+                     lerp( hash(n+157.0), hash(n+158.0),f.x),f.y),
+                lerp(lerp( hash(n+113.0), hash(n+114.0),f.x),
+                     lerp( hash(n+270.0), hash(n+271.0),f.x),f.y),f.z);
+}
+#endif
+
+float fbm( float3 p, float3 dir, Texture2D noisetex, SamplerState noisetexSampler )
+{
+    float f;
+#ifndef LOW_Q
+    float3 q = p - dir; f  = 0.50000*noise( q, noisetex, noisetexSampler );
+	q = q*2.02 - dir; f += 0.25000*noise( q, noisetex, noisetexSampler );
+	q = q*2.03 - dir; f += 0.12500*noise( q, noisetex, noisetexSampler );
+	q = q*2.01 - dir; f += 0.06250*noise( q, noisetex, noisetexSampler );
+	q = q*2.02 - dir; f += 0.03125*noise( q, noisetex, noisetexSampler );
+#elif LOW_Q == 1
+    // in low quality setting, for speed, we try to live with a lower-quality fbm. we compensate with higher grain.
+    float3 q = p - dir; f  = 0.50000*noise( q, noisetex, noisetexSampler );
+	q = q*2.02 - dir; f += 0.25000*noise( q, noisetex, noisetexSampler );
+	q = q*2.03 - dir; f += 0.12500*noise( q, noisetex, noisetexSampler );
+	q = q*2.04 - dir; f += 0.08250*noise( q, noisetex, noisetexSampler );
+#elif LOW_Q == 2
+    float3 q = p - dir; f  = 0.50000*noise( q, noisetex, noisetexSampler );
+	q = q*2.14 - dir; f += 0.29000*noise( q, noisetex, noisetexSampler );
+	q = q*2.25 - dir; f += 0.16500*noise( q, noisetex, noisetexSampler );
+#endif
+	return f;
+}
+
+
+// assign colour to the media
+float4 computeColour( float density, float radius, float bright, float4 colBottom, float4 colTop, float color_low )
+{
+	//float4 colBottom = float4(1.2,0.64,0.22,0.7); //float4(1.2,0.94,0.42,0.7);	// as param
+	//float4 colTop = float4(0.025,0.025,0.025,0.12); //float4(0.15,0.15,0.15,0.1);		// as param
+	//float color_low = 0.25;				// the lower the value, the more black spots appear in the explosion. the higher, the more even the explosion looks like.	// as param
+
+	float c = lerp( 1.0, color_low, density );
+	float4 result = float4( c, c, c, density );
+    result *= lerp( colBottom, colTop, min( (radius+0.5)*0.588, 1.0 ) ) * bright;
+	return result;
+}
+
+// maps 3d position to density
+float densityFn(
+	in float3 p, in float r, float t, in float3 dir, float seed, float downscale, Texture2D noisetex, SamplerState noisetexSampler,
+	float grain, float ballness, float growth, float fade,
+	float rolling_init_damp, float rolling_speed )
+{
+	//float grain = 2.0;					// increase for more detailed explosions, but then you should also increase iterations (and decrease step, which is done automatically)	// as param
+	//float ballness = 2.0;				// lower values makes explosion look more like a cloud. higher values more like a ball.	// as param
+	//float growth = 2.2;					// initial growth to explosion ball. lower values makes explosion grow faster	// as param
+	//float fade = 1.6;					// greater values make fade go faster but later. Thus greater values leave more smoke at the end.	// as param
+	//float rolling_init_damp = 0.3;		// rolling animation initial damping. 0.0 = no damping. nice = 0.2, default = 0.15	// as param
+	//float rolling_speed = 2.0;			// rolling animation speed (static over time). default = 1.0	// as param
+/*#ifdef LOW_Q
+    grain *= 1.0 + 0.1 * float(LOW_Q);
+    ballness *= 0.85;
+    growth *= 1.0 - 0.1 * float(LOW_Q);
+#endif*/
+
+	float den = ballness + (growth+ballness)*log(t)*r;
+    den -= (2.5+ballness)*pow(t,fade)/r;
+
+    if ( den <= -3. ) return -1.;
+    
+	// offset noise based on seed
+	// plus a time based offset for the rolling effect (together with the space inversion below)
+    float s = seed-(rolling_speed/(sin(min(t*3.,1.57))+rolling_init_damp));
+
+    dir *= s;
+
+    // invert space
+    p = -grain*p/(dot(p,p)*downscale);
+
+    // participating media
+    float f = fbm( p, dir, noisetex, noisetexSampler );
+	
+	// add in noise with scale factor
+	den += 4.0*f;
+
+	return den;
+}
+
+// rad = radius of complete mult explosion (range 0 to 1)
+// r = radius of the explosion ball that contributes the highest density
+// rawDens = non-clamped density at the current maching location on the current ray
+// foffset = factor for offset how much the offsetting should be applied. best to pass a time-based value.
+void calcDens(
+	in float3 pos, out float rad, out float r, out float rawDens, in float t, in float foffset, out float4 col, in float bright, Texture2D noisetex, SamplerState noisetexSampler,
+	float4 colBottom, float4 colTop, float color_low, float2 brightrad,
+	float grain, float ballness, float growth, float fade, float densitystrength, float thinout_smooth, float downscale,
+	float rolling_init_damp, float rolling_speed,
+	int mult_explosions,
+	float explosion_seed )
+{
+	//float densitystrength = 1.35;				// higher values make sharper difference between dark and bright colors. low values make more blurry, less color spread and more transparent. default = 1.25 or 1.35	// as param
+	//float2 brightrad = float2(1.3, 1.0);	// adds some variation to the radius of the brightness falloff. x = constant offset, y = density-dependent factor	// as param
+	//const int mult_explosions = 5;		// how many explosion balls to draw	// as param
+
+	//float thinout_smooth = 0.7;			// smoothed thinning out of the outer bounding sphere. 1.0 = no smoothening, 0.0 = heavy thinning, nice = 0.65 to 0.75	// as param
+
+	const float expRadius = 1.75;
+	//float explosion_seed = 0.0;			// keep this constant for a whole explosion, but when differing from explosion to the next one, you get non-identical looking ones	// as param
+	//float downscale = 1.25;				// how much smaller (than expRadius) one explosion ball should be. bigger value = smaller. 1.0 = no scale down.	// as param
+
+    float radiusFromExpCenter = length(pos);
+    rad = radiusFromExpCenter / expRadius;
+
+    r = 0.0;
+    rawDens = 0.0;
+    col = float4(0.,0.,0.,0.);
+
+    [fastopt] for ( int k = 0; k < mult_explosions; ++k )
+    {
+        float t0 = t - balls[k].delay;
+        if ( t0 < 0.0 || t0 > 1.0 )
+			continue;
+
+        float3 p = pos - balls[k].offset * foffset;
+        float radiusFromExpCenter0 = length(p);
+
+        float r0 = downscale* radiusFromExpCenter0 / expRadius;
+        if( r0 > 1.0 )
+			continue;
+        
+        float rawDens0 = densityFn( p, r0, t0, balls[k].dir, explosion_seed + 33.7*float(k), downscale, noisetex, noisetexSampler, grain, ballness, growth, fade, rolling_init_damp, rolling_speed ) * densitystrength;
+
+    	// thin out the volume at the far extends of the bounding sphere to avoid
+    	// clipping with the bounding sphere
+    	rawDens0 *= 1.-smoothstep(thinout_smooth,1.,r0);
+
+    	float dens = clamp( rawDens0, 0.0, 1.0 );
+
+    	float4 col0 = computeColour(dens, r0*(brightrad.x+brightrad.y*rawDens0), bright, colBottom, colTop, color_low);	// also adds some variation to the radius
+
+        // uniform scale density
+        col0.a *= (col0.a + .4) * (1. - r0*r0);
+
+        // colour by alpha
+        col0.rgb *= col0.a;
+
+        col += col0;
+
+    	rawDens = max(rawDens, rawDens0);
+    }
+    
+	//rawDens *= densitystrength;
+}
+
+void contributeColor( in float4 col, inout float4 sum )
+{
+    // alpha blend in contribution
+    sum = sum + col*(1.0 - sum.a);
+    sum.a+=0.15*col.a;
+}
+
+float4 raymarch(
+	in float3 rayo, in float3 rayd, in float2 expInter, in float t, float t_norm, out float d, in float depth, Texture2D noisetex, SamplerState noisetexSampler,
+	float4 colBottom, float4 colTop, float color_low, float2 brightness, float2 brightrad,
+	float grain, float ballness, float growth, float fade, float densitystrength, float thinout_smooth, float downscale,
+	float rolling_init_damp, float rolling_speed,
+	int steps, int mult_explosions,
+	float explosion_seed )
+{
+	//const int steps = 32;				// iterations when marching through cloud noise. default = 64. 40 might still suffice. When putting higher, explosion becomes too dense, so make colBottom and colTop more transparent.	// as param
+	//float2 brightness = float2(3.0, 2.2);	// x = constant offset, y = time-dependent factor	// as param
+
+    float4 sum = float4(0.,0.,0.,0.);
+    
+    float step = 1.5 / float(steps);
+     
+    // start iterating on the ray at the intersection point with the near half of the bounding sphere
+	float3 pos = rayo + rayd * (expInter.x);	// no dither
+
+    float march_pos = expInter.x;
+    d = 4000.0;
+    
+    //float t_norm = t / tmax;
+    float smooth_t = sin(t_norm*2.1);	//sin(t*2.);
+
+	float t1 = 1.0 - t_norm;	// we use t_norm instead of t so that final color is reached at end of whole animation and not already at end of first explosion ball.
+	float bright = brightness.x + brightness.y * t1*t1;
+	
+    [fastopt] for( int i=0; i<steps; i++ )
+    {
+        if( sum.a >= 0.98 ) { d = march_pos; break; }
+        if ( march_pos >= expInter.y || march_pos >= depth ) break;
+        
+        float rad, r, rawDens;
+        float4 col;
+        calcDens( pos, rad, r, rawDens, t, smooth_t, col, bright, noisetex, noisetexSampler, colBottom, colTop, color_low, brightrad, grain, ballness, growth, fade, densitystrength, thinout_smooth, downscale, rolling_init_damp, rolling_speed, mult_explosions, explosion_seed );
+
+        if ( rawDens <= 0.0 )
+        {
+            float s = step * 2.0;
+            pos += rayd * s;
+            march_pos += s;
+            continue;
+        }
+        
+        contributeColor( col, sum );
+		
+		// take larger steps through low densities.
+		// something like using the density function as a SDF.
+		float stepMult = 1.0 + (1.-clamp(rawDens+col.a,0.,1.));
+		// step along ray
+		pos += rayd * step * stepMult;
+        march_pos += step * stepMult;
+
+		//pos += rayd * step;
+	}
+	
+    return clamp( sum, 0.0, 1.0 );
+}
+
+// iq's sphere intersection, but here fixed for a sphere at (0,0,0)
+float2 iSphere(in float3 ro, in float3 rd, in float rad)
+{
+	//sphere at origin has equation |xyz| = r
+	//sp |xyz|^2 = r^2.
+	//Since |xyz| = ro + t*rd (where t is the parameter to move along the ray),
+	//we have ro^2 + 2*ro*rd*t + t^2 - r2. This is a quadratic equation, so:
+	//float3 oc = ro - sph.xyz; //distance ray origin - sphere center
+	
+	float b = dot(ro, rd);					//=dot(oc, rd);
+	float c = dot(ro, ro) - rad * rad;		//=dot(oc, oc) - sph.w * sph.w; //sph.w is radius
+	float h = b*b - c; // delta
+	if(h < 0.0) 
+		return float2(-1.,-1.);
+    //h = sqrt(h);
+    h *= 0.5;		// just some rough approximation to prevent sqrt.
+    return float2(-b-h, -b+h);
+}
+
+void setup( int mult_explosions, float delay_range, float delay_seed, float variation_seed, float ball_spread )
+{
+	//const int mult_explosions = 5;		// how many explosion balls to draw	// as param
+	//float variation_seed = 0.0;			// influences position variation of the different explosion balls	// as param
+	//float delay_seed = 0.0;				// influences the start delay variation of the different explosion balls	// as param
+	//float ball_spread = 1.0;			// how much to spread ball starting positions from the up vector. 0.0 = all on up vector, 1.0 = any direction between up and down vector.	// as param
+
+	const float pi=3.14159265;
+
+    // first expl ball always centered looking up
+    balls[0].offset = float3(0.,0.,0.);
+    balls[0].dir = float3(0.,.7,0.);		// not normalized so that expl ball 0 rolls somewhat slower
+    balls[0].delay = 0.0;
+
+    float pseed = variation_seed;
+    float tseed = delay_seed;
+    float maxdelay = 0.0;
+    [fastopt] for ( int k = 1; k < mult_explosions; ++k )
+    {
+        float pseed = variation_seed + 3. * float(k-1);
+        float tseed = delay_seed + 3. * float(k-1);
+        float2 phi = hash2(pseed) * float2(2.*pi, pi*ball_spread);
+        float2 tilted = float2( sin(phi.y), cos(phi.y) );
+        float3 rotated = float3( tilted.x * cos(phi.x), tilted.y, tilted.x * sin(phi.x) );
+        balls[k].offset = 0.7 * rotated; //hash3(pseed) - 0.5;
+        balls[k].dir = normalize( balls[k].offset );
+        balls[k].delay = delay_range * hash(tseed);
+        pseed += 3.;
+        tseed += 3.;
+        maxdelay = max(maxdelay, balls[k].delay);
+    }
+    
+    if ( maxdelay > 0.0 )
+    {
+        // Now stretch the ball explosion delays to the maximum allowed range.
+        // So that the last ball starts with a delay of exactly delay_range and thus we do not waste any final time with just empty space.
+       	[fastopt] for ( int k = 0; k < mult_explosions; ++k )
+            balls[k].delay *= delay_range / maxdelay;
+    }
+}
+
+// make sure that time remains between 0.0 and 1.0
+// depth should be calculated as depthOnCameraDirVector = -scenedepth / cameraToPixelDir_CamSpace.z
+void mainImage(
+	out float4 fragColor, in float time, in float3 camPos, in float3 pos, in float3 centerpos, in float depth, Texture2D noisetex, SamplerState noisetexSampler,
+	in float4 colBottom, in float4 colTop, in float color_low, in float2 brightness, in float2 brightrad, in float contrast,
+	in float grain, in float ballness, in float growth, in float fade, in float densitystrength, in float thinout_smooth, in float downscale,
+	in float rolling_init_damp, in float rolling_speed,
+	in int steps, in int mult_explosions,
+	in float explosion_seed, in float variation_seed, in float delay_seed, in float delay_range, in float ball_spread )
+{
+	const float expRadius = 1.75;
+	//float contrast = 1.0;				// final color contrast. higher values make ligher contrast. default = 1.0	// as param
+	//float delay_range = 0.25;			// describes the maximum delay for explosion balls to start up. Notice, this delay is relative to one explosion ball duration, thus the full animation runs in a time scale 1.0 + delay_range.	// as param
+
+
+	float tmax = 1.0 + delay_range;
+    // t goes from 0 to 1 + mult delay. that is 0 to 1 is for one explosion ball. the delay for time distribution of the multiple explosion balls.
+    // t_norm is 0 to 1 for the whole animation (incl mult delay).
+	float t_norm = time;
+	float t = t_norm * tmax;
+
+    // some global initialization. would be nice to do that not in the pixel shader but in something less often called like the vertex shader. or put them in as params.
+    setup( mult_explosions, delay_range, delay_seed, variation_seed, ball_spread );
+
+	float3 cameraPos = camPos - centerpos;
+	float3 rayDir = normalize( pos - camPos );
+	
+	float4 col = float4(0.,0.,0.,0.);
+    float d = 4000.0;
+	
+    // does pixel ray intersect with exp bounding sphere?
+	float2 boundingSphereInter = iSphere( cameraPos, rayDir, expRadius );
+	if( boundingSphereInter.x > 0. && boundingSphereInter.x < depth )
+	{
+		// yes, cast ray
+	    col = raymarch( cameraPos, rayDir, boundingSphereInter, t, t_norm, d, depth, noisetex, noisetexSampler, colBottom, colTop, color_low, brightness, brightrad, grain, ballness, growth, fade, densitystrength, thinout_smooth, downscale, rolling_init_damp, rolling_speed, steps, mult_explosions, explosion_seed );
+	}
+	
+    // smoothstep final color to add contrast
+    //col.xyz = col.xyz*col.xyz*(3.0-2.0*col.xyz);
+	//col.xyz = col.xyz*col.xyz*(2.0-col.xyz);	// darker contrast
+	col.xyz = col.xyz*col.xyz*(1.0+contrast*(1.0-col.xyz));
+
+	// gamma
+	//col.xyz = pow( col.xyz, float3(1.25) );
+    //col.a = pow( col.a, 1.5 );
+
+    // from https://www.shadertoy.com/view/XdSXDc
+    //col.rgb = clamp(pow(col.rgb, float3(0.416667))*1.055 - 0.055,0.,1.); //cheap sRGB approx
+
+	fragColor = col;
+}
+
+
+#endif
+
+#define CUSTOM_TERMINATE \

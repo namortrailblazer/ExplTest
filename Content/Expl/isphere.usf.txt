@@ -1,0 +1,53 @@
+	return 0.;
+}
+
+/* Sphere boundary test shader
+
+Created by Roman Komary 2015
+License Creative Commons Attribution-NonCommercial-ShareAlike 3.0 Unported License http://creativecommons.org/licenses/by-nc-sa/3.0/deed.en_US
+
+Based on iq's sphere intersection as seen in huwb's Anatomy of an explosion https://www.shadertoy.com/view/Xss3DS
+*/
+
+#ifndef ISPHERESHADER
+#define ISPHERESHADER
+
+
+// iq's sphere intersection, but here fixed for a sphere at (0,0,0)
+float2 iSphere(in float3 ro, in float3 rd, in float rad)
+{
+	float b = dot(ro, rd);					//=dot(oc, rd);
+	float c = dot(ro, ro) - rad * rad;		//=dot(oc, oc) - sph.w * sph.w; //sph.w is radius
+	float h = (b*b) - c; // delta
+	if(h < 0.0) 
+		return float2(-1.,-1.);
+    h = sqrt(h);
+    //h *= 0.5;		// just some rough approximation to prevent sqrt.
+	// You can see the distortions of this approximation when the sphere is partially (mostly) inside a wall or floor.
+    return float2(-b-h, -b+h);
+}
+
+void mainImage( out float4 fragColor, in float3 camPos, in float3 pos, in float3 centerpos, in float depth )
+{
+	float expRadius = 1.75;
+
+	float3 cameraPos = camPos - centerpos;
+	float3 rayDir = normalize( pos - camPos );
+	
+	float4 col = float4(0.,0.,0.,0.);
+	
+    // does pixel ray intersect with exp bounding sphere?
+	float2 boundingSphereInter = iSphere( cameraPos, rayDir, expRadius );
+	if( boundingSphereInter.x > 0. )
+	{
+		if ( boundingSphereInter.x < depth )
+			col = float4(1.,1.,1.,.5);
+	}
+
+	fragColor = col;
+}
+
+
+#endif
+
+#define CUSTOM_TERMINATE \

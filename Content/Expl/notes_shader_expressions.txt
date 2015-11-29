@@ -1,0 +1,181 @@
+Roman Komary 21.11.2015
+
+Ok, I decided for now to implement the explosion shader in a material custom node, since I was not yet able to figure out, how to correctly set up vertex factory and drawing policy and stuff and using them without changing engine code.
+
+
+
+--------------------------------------------------------------
+Let's first start off with the iSphere shader so that I can properly set up the particle and rendering dimensions fitting to the bounding sphere of the explosion shader to which we will come later on.
+
+The big disadvantage of the custom node comes from the fact that the material shaders in Unreal Engine 4 (4.9 I am using right now) are designed using on-demand execution.
+
+That is, for each pin of the material output node, a separate query function is called by the material shader.
+So for the emissive color, it calls GetMaterialEmissive(FMaterialPixelParameters Parameters) and for opacity it calls GetMaterialOpacity(FMaterialPixelParameters Parameters).
+
+Since my shader code is expensive, it delivers color and alpha in a float4 which is the result of the custom node.
+To put that into the material output node, I have to split them and but the rgb into emissive and the a into opacity pin.
+
+Unfortunately, the on-demand design and the functionality of the custom node cause the generated usf shader to call the shader once for GetMaterialOpacity and once again for GetMaterialEmissive.
+
+That is a waste of GPU power and this is the biggest disadvantage I can see on the custom node.
+
+(Further more, the custom node even duplicates the whole custom expression in generated code, I don't know why, which should mainly have just an impact no shader compilation time).
+
+To have at least some result for now, I live with it for the moment until I can figure out how to do vertex factories and stuff.
+
+
+
+There is another disadvantage on the custom node, but that I can handle with a hack:
+The shader code entered in a custom node is one custom expresssion which will be converted into a function in the generated shader code.
+
+But I want to have functions defined myself. A trick is to know that the custom node inserts the code simply inside the {} brackets of the generated function definition.
+
+So I simply write the } closing bracket myself into the custom node and finish it with a
+	#define NIX \
+which will eat up the final } closing bracket of the function body.
+
+Like this I can enter function definitions after my manually entered } closing bracket but before the mentioned final #define.
+
+
+
+But these functions have to reside in generated shader code before the are called otherwise a shader compilation error occurs.
+
+To solve that, I got the idea of cascading 2 custom nodes. The first one defines the shader functions as mentioned above and the dummy return value of that custom node I enter into a dummy input param (which I call context) of the following custom node, which I use to call my main shader function.
+
+
+
+There is still the case that even the first of the cascaded custom nodes gets generated twice (since I need them for emissive and opacity, see above).
+
+To deal with that, I use the usual C++ header file handling mechanism for this: Do #ifndef and then #define of a unique macro variable.
+
+(E.g. see the iSphereShader).
+
+
+
+Ah one more note on the pain in the a** that the shader is called twice per pixel:
+I tried to define global shader variables. The idea I had was to store in there per pixel if the shader has been called already and cache its result.
+
+I tried the global variable with static and without and even as const.
+
+But when I initialize them in place, I cannot read them in the shader function. They contain just crap. Also when I try to initialize them during the GetMaterialOpacity call and read them during the GetMaterialEmissive call.
+
+So unfortunately, this hurdle I cannot take without doing vertex factories and stuff.
+
+
+
+For the explosion effect basing on a bounding sphere, I first try to handle a simple sphere shader,
+basing on iq's iSphere clipping sphere that you can find in many shaders around on shadertoy.com.
+
+Anyway this iSphere code will be used as clipping sphere for the explosion effect.
+
+
+
+I now have to get in the different relevant positions of particle and camera and what not.
+
+Ah yes btw.: for ease, I stick to making a material for particles, where I expect a particle being facing the camera.
+
+Ok, the requirements are:
+- current pixel position on the particle quad (sprite)
+- current camera position
+- current particle position, which is the center of the quad
+- the existing scene depth behind the currently rendered pixel
+
+
+
+To make the sphere not depth-clipped away in its front half, I have to move the quad vertices towards the camera by the sphere radius (particle size).
+(I expect the particle to be square, so I use just particle size.x and ignore y which I expect to be the same as x).
+
+
+
+The scene depth still needs some adjustment. I want to compare it being put on the ray from the camera to the current pixel (radial distance from the camera to the pixel). But the scene depth is always parallel to the general camera direction (orthogonal distance from PixelDepth).
+
+This adjustment I do in the invoking custom node itself (the 2nd custom node).
+
+
+
+To offset the quad vertices towards the camera, I use the world position offset of the material.
+But I have to move them along the ray from the camera to the vertex because that way, the quad will not become bigger on the screen and thus still encapsulates the sphere perfectly (expecting of course the iSphere shader code to have a proper scaled sphere).
+
+But don't forget, the particle position passed to the invoking custom node shall not be offset because the sphere should stay in place. It's just the quad that we move towards the camera so that we depth-test of the quad does not cut off the front half of the sphere (when the sphere intersects with a wall or floor or something).
+
+
+
+I set the sphere size itself being passed as value to the shader as being best 3.6 divided by the particle size.
+3.6 is just a value from trying out. It is as arbitrary as the shader-internal sphere radius 1.75 is.
+
+
+
+Material and particle system setup:
+
+The material has to be set to:
+- Blend mode: Translucent
+- Shading model: Unlit
+- Disable Depth Test: off (because we want depth tests still)
+- Used with Particle Sprites: on
+
+I also turned
+- Fully Rough: on
+- Use Lightmap Directionality: off
+as it says it could save on some shader calls. But I did not check or confirm on that.
+
+
+
+The particle system we want to support sorted particles.
+So we cannot make them as GPU particles. But anyway, for explosions we should not have too many particles at once anyway.
+
+Further:
+- Screen alignment: PSA Facing Camera Position
+	It is not good to set this to PSA Square because a sphere looks stretched in the corners of the screen and with Facing Camera, the quad also gets distorted in the same way, thus still encapsulating the distorted sphere nicely. PSA Square does not do this.
+- Sort mode: PSORTMODE Distance to View
+	Not sure if the ViewProjDepth setting would work well in all cases as well. But DistanceToView seems to work properly.
+- Emitter Normals mode: ENM Camera Facing
+	Not sure if I reall need it, but well...
+
+
+
+Ah yeah, one word on color:
+I don't know really why, but putting a white color to material's emissive pin does not show a pure white component in the scene. The engine's base pass shaders seem to alter even the emissive color, making it much darker and even get some coloring (don't know if from lights or static GI).
+I did not find a way to switch that off yet (did not spend much time on that, so maybe there is a simple way). I just added a scaling factor for the resulting color of the shader.
+For now I am fine with that.
+
+I suppose when doing custom shaders purely with vertex factories and stuff, we go around the material system and thus neither have the on-demand duplicate calls problem as well as no final altering of the output color, if we do not want to.
+But that's not my concern right now and here with the custom nodes.
+
+
+
+--------------------------------------------------------------
+now trying just on the multexpl shader itself:
+
+I thought to try to give it a go again with that annoying shader-double-execution per pixel.
+
+I tried the following things:
+- check material translucency settings but they are all disabled since we use Unlit material.
+- disable "Use Translucency Vertex Fog". But did not help.
+- make a "Make Material" Node and put that into the material's output node that I switched to "Use Material Attributes" mode as on.
+- disable "Tangent Space Normal", disable "Support accurate velocities from Vertex Deformation".
+- disable "Separate Translucency"
+- make the global variables static, although I made that as one of the last tries.
+
+Somewhen it did work. Don't tell me what it is (although I have a feeling it's the making global vars static). I reverted all these settings (I believe that I did not forget to revert any) and removed the "Make Material" node again and it still does work.
+
+(Notice, I did disable "Tangent Space Normal" and "Support accurate velocities from Vertex Deformation" again because it is said that they save a bit on some shader calls, but these settings did not seem to influence the working of the global variables anyway).
+
+So I leave it like this for now and hope it is a stable situation. Still also have to test it with a Unreal Engine 4.10 project.
+I have an unstable feeling because I believe that I reverted my steps and it still does work. Well I hope the 4.10 test with a fresh project will reveal that. To be continued...
+
+Incredible, I tested it now with a fresh project on Unreal Engine 4.10 (copying the uassets into there), and it does work.
+So I consider this stable (in the hope that future engine versions will not change anything on shader compilation regarding the tricks and hacks I use to make this explosion shaders work with custom nodes).
+
+I suppose making the variables static made the trick. I think earlier I must have made a mistake somehow so that I thought static variables will not work.
+I cannot find out exactly why it's working now - and this still gives me a bit of a bitter taste - but I am happy that it is working now.
+
+
+
+Remaining disadvantage:
+
+The main one here is speed. As all calculations have to be done in the custom nodes, they actually get performed in the pixel shader and thus per pixel. Some vector transformations, parameter setups, and the in-shader explosion ball setups could be performed in a vertex shader (and thus per vertex) and just passed on to the pixel shader.
+
+But since I do not have access to vertex shader (well maybe the World Position Offset pin would allow me to do that, but still) as well as not having access to the parameters passed from vertex to pixel shader, I have to live with that drawback for now.
+A proper vertex factory implementation with own vertex and pixel shaders should be able to fix that.
+
+
