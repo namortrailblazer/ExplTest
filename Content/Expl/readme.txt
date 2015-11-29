@@ -8,7 +8,7 @@ This is "Explosion effect" https://www.shadertoy.com/view/Xd3GWn
 Based on huwb's Anatomy of an explosion https://www.shadertoy.com/view/Xss3DS
 and on iq's Hell https://www.shadertoy.com/view/MdfGRX
 
-For license, see included Expl/license.txt.
+For license, see included Content/Expl/license.txt.
 
 
 This implements a raymarching shader to approximate emulation of an explosion effect.
@@ -23,7 +23,7 @@ The package has been created using Unreal Engine 4.9. A test with currently newe
 same.
 
 Anyway, since the shader bases on arts from shadertoy.com which run under a non-commercial creative commons license,
-I am forced to put this explosion shader (and iSphere shader) also under the same license (see Expl/license.txt).
+I am forced to put this explosion shader (and iSphere shader) also under the same license (see Content/Expl/license.txt).
 See http://creativecommons.org/compatiblelicenses for CC BY-NC-SA 3.0.
 
 This license applies solely to the shader source codes plus the material assets that include the custom nodes with shader source codes.
