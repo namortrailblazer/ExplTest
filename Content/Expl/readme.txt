@@ -1,13 +1,13 @@
 Explosion effect shader as Unreal Engine 4 custom nodes.
+Created by Roman Komary 2014-2016
 
-Created by Roman Komary 2014-2015
+License Creative Commons Attribution-NonCommercial-ShareAlike 3.0 Unported License http://creativecommons.org/licenses/by-nc-sa/3.0/deed.en_US
+
 
 This is "Explosion effect" https://www.shadertoy.com/view/Xd3GWn
 
 Based on huwb's Anatomy of an explosion https://www.shadertoy.com/view/Xss3DS
 and on iq's Hell https://www.shadertoy.com/view/MdfGRX
-
-For license, see included Content/Expl/license.txt.
 
 
 This implements a raymarching shader to approximate emulation of an explosion effect.
@@ -18,17 +18,11 @@ To make it work with custom nodes, quite several (somewhat dirty) hacks have bee
 Therefore the shaders in this package should not be considered as appropriate for production purposes.
 But this is just a recommendation.
 
-The package has been created using Unreal Engine 4.9. A test with currently newest version 4.10 still works the
+The package has been created using Unreal Engine 4.9. A test with currently newest version 4.11 as well as 4.10 still works the
 same.
 
-Anyway, since the shader bases on arts from shadertoy.com which run under a non-commercial creative commons license,
-I am forced to put this explosion shader (and iSphere shader) also under the same license (see Content/Expl/license.txt).
-See http://creativecommons.org/compatiblelicenses for CC BY-NC-SA 3.0.
 
-This license applies solely to the shader source codes plus the material assets that include the custom nodes with shader source codes.
-
-
-The shaders can be found inside the Content/Expl folder. Material "ExplosionShader" contains the shaders in custom nodes. For easy of reading and editing, the shader codes themselves are available in several files named *.usf.txt
+The shaders can be found inside the Content/Expl folder. Material "ExplosionShader" contains the shaders in custom nodes. For ease of reading and editing, the shader codes themselves are available in several files named *.usf.txt
 
 The assests building on top of the materials (so material instances and particle systems) in this folder are just for testing.
 
